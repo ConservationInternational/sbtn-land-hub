@@ -21,7 +21,7 @@ NODATA_VALUE = 0
 
 
 @numba.jit(nopython=True)
-@cc.export('calc_deg_lc', 'i2[:,:](i4[:,:], i4[:,:], i2[:], i4)')
+@cc.export('calc_natural_conversion', 'i2[:,:](i4[:,:], i4[:,:], i2[:], i4)')
 def calc_natural_conversion(trans, trans_codes, trans_meanings):
     '''calculate land cover degradation'''
     shp = trans.shape

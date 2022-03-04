@@ -13,7 +13,8 @@ from dask.distributed import LocalCluster
 
 import natural_conversion_parallel_functions
 
-N_WORKERS = 30
+N_WORKERS = 60
+CROP_DATA_FOR_TESTING = False
 
 DATA_PATH = Path('/data')
 
@@ -21,13 +22,11 @@ IN_S3_BUCKET = 'trends.earth-private'
 IN_S3_PREFIX = 'esa-cci'
 OUT_S3_BUCKET = 'trends.earth-private'
 OUT_S3_PREFIX = 'esa-cci/transitions'
-INITIAL_YEAR = 2000
-FINAL_YEAR = 2015
 
-IN_FILES = [
-    f'ESACCI-LC-L4-LCCS-Map-300m-P1Y-{year}-v2.0.7.tif'
-    for year in [INITIAL_YEAR, FINAL_YEAR]
-]
+INITIAL_YEAR = 2000
+FINAL_YEAR = 2019
+CCI_FILE_INITIAL = 'ESACCI-LC-L4-LCCS-Map-300m-P1Y-2000-v2.0.7.tif'
+CCI_FILE_FINAL = 'C3S-LC-L4-LCCS-Map-300m-P1Y-2019-v2.1.1.tif'
 
 formatter = '[%(levelname)s] %(asctime)s - %(message)s [%(funcName)s %(lineno)d]'
 logging.basicConfig(level=logging.INFO, format=formatter)
@@ -119,8 +118,10 @@ def main():
     # Download ESA data if not already present
     DATA_PATH.mkdir(parents=True, exist_ok=True)
 
-    for in_file in IN_FILES:
+    in_files = []
+    for in_file in [CCI_FILE_INITIAL, CCI_FILE_FINAL]:
         local_file_path = DATA_PATH / in_file
+        in_files.append(local_file_path)
 
         if not local_file_path.exists():
             get_from_s3(IN_S3_BUCKET, IN_S3_PREFIX, in_file,
@@ -131,23 +132,20 @@ def main():
     # Load data
 
     logger.info('Loading data')
-    in_files = [*DATA_PATH.glob('ESACCI-LC-L4-LCCS-Map-300m-P1Y-*.tif')]
 
-    lc_initial = rioxarray.open_rasterio(DATA_PATH / in_files[0],
-                                         chunks=True,
-                                         variable='lccs_class')
+    lc_initial = rioxarray.open_rasterio(in_files[0], chunks=True)
     lc_initial = lc_initial.rename('lc_initial').sel(band=1).drop('band')
-
-    lc_final = rioxarray.open_rasterio(DATA_PATH / in_files[-1],
-                                       chunks=True,
-                                       variable='lccs_class')
-    lc_final = lc_final.rename('lc_final').sel(band=1).drop('band')
+    lc_final = rioxarray.open_rasterio(in_files[-1], chunks=True)
+    lc_final = lc_final.rename('lc_final').sel(time=lc_final['time'][0]).drop('time')
 
     # Crop data for testing
-    lc_initial = lc_initial[48000:96000, 48000:96000]
-    lc_final = lc_final[48000:96000, 48000:96000]
+    if CROP_DATA_FOR_TESTING:
+        logger.warning('****** Cropping data for testing ******')
+        lc_initial = lc_initial[48000:96000, 48000:96000]
+        lc_final = lc_final[48000:96000, 48000:96000]
 
-    lc = xr.merge([lc_initial, lc_final])
+    lc = xr.merge([lc_initial, lc_final], combine_attrs='drop').unify_chunks()
+    logger.info(f'lc {lc}')
 
     logger.debug('lc %s', lc)
     attrs_to_copy = ['_FillValue', 'scale_factor', 'add_offset']
@@ -184,14 +182,6 @@ def main():
     logger.debug('transition %s', trans)
 
     trans = trans.compute()
-
-    # logger.info('Writing netcdf to S3')
-    # netcdf_file_trans = (
-    #     DATA_PATH /
-    #     f'ESACCI-LC-L4-LCCS-Map-300m-P1Y-Transitions_{INITIAL_YEAR}-{FINAL_YEAR}.nc'
-    # )
-    # trans.to_netcdf(netcdf_file_trans)
-    # put_to_s3(netcdf_file_trans, OUT_S3_BUCKET, OUT_S3_PREFIX)
 
     logger.info('Writing geotiff to S3')
     ds_to_cog(trans, cloud='s3')
