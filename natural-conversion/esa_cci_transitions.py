@@ -11,7 +11,7 @@ import xarray as xr
 from dask.distributed import Client
 from dask.distributed import LocalCluster
 
-import natural_conversion_parallel_functions
+import parallel_functions
 
 N_WORKERS = 60
 CROP_DATA_FOR_TESTING = False
@@ -176,7 +176,7 @@ def main():
     }
 
     trans = xr.map_blocks(
-        natural_conversion_parallel_functions.compute_transitions,
+        parallel_functions.compute_transitions,
         lc,
         kwargs=kwargs)
     logger.debug('transition %s', trans)
