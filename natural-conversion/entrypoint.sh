@@ -10,6 +10,10 @@ case "$1" in
         echo "Resampling cropland to match ESA CCI"
         exec python cropland_match_to_esa.py "${@:2}"
 		;;
+    esa_cci)
+        echo "Starting esa_cci_transitions calculations"
+        exec python esa_cci_transitions.py "${@:2}"
+		;;
     natural_conversion)
         echo "Starting natural_conversion calculations"
         exec python natural_conversion.py "${@:2}"

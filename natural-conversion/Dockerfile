@@ -32,9 +32,10 @@ RUN apt-get update -y && apt-get install -y \
 RUN pip3 install rioxarray
 RUN pip3 install netcdf4
 RUN pip3 install rollbar
-RUN python -m pip install "dask>=2021.11.12[distributed]" --upgrade
+RUN python -m pip install "dask>=2022.2.1[distributed]" --upgrade
 RUN pip3 install bokeh>=2.1.1
 RUN pip3 install openpyxl
+RUN pip3 install bottleneck --upgrade
 
 RUN apt-get install -y libpq-dev
 RUN pip3 install geocube
@@ -54,12 +55,13 @@ RUN echo "[s3]" >> ~/.boto && \
 
 ADD entrypoint.sh /work/entrypoint.sh
 ADD cropland_match_to_esa.py /work/cropland_match_to_esa.py
+ADD esa_cci_transitions.py /work/esa_cci_transitions.py
 ADD natural_conversion.py /work/natural_conversion.py
-ADD natural_conversion_parallel_functions.py /work/natural_conversion_parallel_functions.py
+ADD parallel_functions.py /work/parallel_functions.py
 ADD ESA_CCI_Natural_Conversion_Coding_v2.xlsx /work/ESA_CCI_Natural_Conversion_Coding_v2.xlsx
 
 # dask dashboard
-#EXPOSE 8787
+EXPOSE 8787
 
 WORKDIR /work
 
