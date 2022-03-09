@@ -1,20 +1,29 @@
 import json
 import logging
+import os
 import sys
+from math import floor
 from pathlib import Path
 from pathlib import PurePath
 
 import boto3
 import dask
+import distributed
 import numpy as np
 import openpyxl
 import parallel_functions
+import psutil
+import rasterio
 import rioxarray
 import xarray as xr
 from dask.distributed import Client
 from dask.distributed import LocalCluster
+from dask.distributed import Lock
+from dask.distributed import progress
 
-TESTING = True
+TESTING = False
+N_WORKERS = 14
+THREADS_PER_WORKER = 6
 
 DATA_PATH = Path("/data")
 
@@ -38,6 +47,7 @@ logging.getLogger("botocore").setLevel(logging.WARNING)
 logging.getLogger("s3transfer").setLevel(logging.WARNING)
 logging.getLogger("boto3").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("distributed.worker").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +69,59 @@ def get_from_s3(bucket, prefix, filename, out_path):
     client.download_file(bucket, f"{prefix}/{filename}", out_path)
 
 
-def ds_to_cogs(ds):
+def _log_file_size(out_file):
+    file_size = os.stat(out_file).st_size
+    logger.info(
+        f"File size for %s is %s GB", out_file, round(file_size / (1024 ** 3), 2)
+    )
+
+
+def ds_to_cog(ds, client):
+    ds.rio.write_crs("EPSG:4326", inplace=True)
+
+    if TESTING:
+        testing_string = "_TEST"
+    else:
+        testing_string = ""
+
+    out_file = (
+        DATA_PATH
+        / f"natural-conversion_300m_{INITIAL_YEAR}-{FINAL_YEAR}{testing_string}.tif"
+    )
+    logger.info(f"Writing {out_file}...")
+    ds.rio.to_raster(
+        out_file,
+        driver="Gtiff",
+        compress="LZW",
+        lock=Lock("rio-write", client=client),
+    )
+    _log_file_size(out_file)
+    put_to_s3(out_file, OUT_S3_BUCKET, OUT_S3_PREFIX)
+
+
+def ds_to_netcdf(ds):
+    if TESTING:
+        testing_string = "_TEST"
+    else:
+        testing_string = ""
+
+    out_file = (
+        DATA_PATH
+        / f"natural-conversion_300m_{INITIAL_YEAR}-{FINAL_YEAR}{testing_string}.nc"
+    )
+    logger.info(f"Writing {out_file}...")
+    encoding_dict = {key: {"zlib": True, "complevel": 6} for key in ds.data_vars.keys()}
+    write_job = ds.to_netcdf(out_file, encoding=encoding_dict, compute=False)
+
+    write_job = write_job.persist()
+    progress(write_job)
+    write_job.compute()
+    _log_file_size(out_file)
+
+    put_to_s3(out_file, OUT_S3_BUCKET, OUT_S3_PREFIX)
+
+
+def ds_to_cogs(ds, client):
     ds.rio.write_crs("EPSG:4326", inplace=True)
 
     if TESTING:
@@ -72,9 +134,14 @@ def ds_to_cogs(ds):
             DATA_PATH
             / f"natural-conversion_300m_{INITIAL_YEAR}-{FINAL_YEAR}_{name}{testing_string}.tif"
         )
-        array.rio.to_raster(out_file, tiled=True, compress="LZW")
+        array.rio.to_raster(
+            out_file,
+            driver="Gtiff",
+            compress="LZW",
+            lock=Lock("rio-write", client=client),
+        )
+        _log_file_size(out_file)
         put_to_s3(out_file, OUT_S3_BUCKET, OUT_S3_PREFIX)
-        out_file.unlink()
 
 
 def get_trans_codes(
@@ -113,6 +180,16 @@ def get_trans_codes(
 
 
 def main():
+    logger.info(
+        "Using dask version %s, xarray version %s, rasterio version %s, "
+        "rioxarray version %s, distributed version %s",
+        dask.__version__,
+        xr.__version__,
+        rasterio.__version__,
+        rioxarray.__version__,
+        distributed.__version__,
+    )
+
     # Download data
     DATA_PATH.mkdir(parents=True, exist_ok=True)
 
@@ -149,73 +226,104 @@ def main():
 
     logger.info("Loading data")
 
-    with dask.config.set(**{"array.slicing.split_large_chunks": True}):
-        trans = rioxarray.open_rasterio(local_trans_file_path, chunks=True)
+    with LocalCluster() as cluster, Client(cluster) as client:
+        logger.info(f"cluster {cluster}")
+
+        trans = rioxarray.open_rasterio(
+            local_trans_file_path,
+            chunks=dict(x=1024, y=1024),
+            # lock=Lock("rio-read-trans", client=client),
+        )
         # for trans band 1 is transition code, band 2 is meaning
         trans = trans.rename("trans").sel(band=2).drop("band")
 
         initial_cover = rioxarray.open_rasterio(
-            local_initial_cover_file_path, chunks=True
+            local_initial_cover_file_path,
+            chunks=dict(x=1024, y=1024),
+            # lock=Lock("rio-read-initial-cover", client=client),
         )
         initial_cover = initial_cover.rename("lc_initial").sel(band=1).drop("band")
 
-        crops_initial = rioxarray.open_rasterio(crops_in_files[0], chunks=True)
+        crops_initial = rioxarray.open_rasterio(
+            crops_in_files[0],
+            chunks=dict(x=1024, y=1024),
+            # lock=Lock("rio-read-crops", client=client),
+        )
         crops_initial = crops_initial.rename("crops_initial").sel(band=1).drop("band")
-        crops_final = rioxarray.open_rasterio(crops_in_files[-1], chunks=True)
+        crops_final = rioxarray.open_rasterio(
+            crops_in_files[-1],
+            chunks=dict(x=1024, y=1024),
+            # lock=Lock("rio-read-crops", client=client),
+        )
         crops_final = crops_final.rename("crops_final").sel(band=1).drop("band")
-
-        # logger.info("********** trans %s", trans)
-        # logger.info("********** initial_cover %s", initial_cover)
-        # logger.info("********** crops_initial %s", crops_initial)
-        # logger.info("********** crops_final %s", crops_final)
 
         # Crop data for testing
         if TESTING:
             logger.warning("****** Cropping data for testing ******")
-            trans = trans[12000:22000, 12000:22000]
-            initial_cover = initial_cover[12000:22000, 12000:22000]
-            crops_initial = crops_initial[12000:22000, 12000:22000]
-            crops_final = crops_final[12000:22000, 12000:22000]
+            trans = trans[22000:32000, 22000:32000]
+            initial_cover = initial_cover[22000:32000, 22000:32000]
+            crops_initial = crops_initial[22000:32000, 22000:32000]
+            crops_final = crops_final[22000:32000, 22000:32000]
 
         in_data = xr.merge(
             [trans, initial_cover, crops_initial, crops_final],
             join="override",
             combine_attrs="drop",
-        ).unify_chunks()
+        ).chunk(dict(x=512, y=512))
 
-    trans_codes, trans_meanings = get_trans_codes(
-        "ESA_CCI_Natural_Conversion_Coding_v2.xlsx",
-        initial_class_column=1,
-        final_class_column=3,
-        first_data_row=3,
-        last_data_row=40,
-    )
+        trans_codes, trans_meanings = get_trans_codes(
+            "ESA_CCI_Natural_Conversion_Coding_v2.xlsx",
+            initial_class_column=1,
+            final_class_column=3,
+            first_data_row=3,
+            last_data_row=40,
+        )
 
-    kwargs = {
-        "trans_codes": trans_codes,
-        "trans_meanings": trans_meanings,
-        "x_res": float((in_data.x[1] - in_data.x[0]).values),
-        "y_res": float((in_data.y[0] - in_data.y[1]).values),
-    }
+        ###########################################################################
+        # Compute transitions
 
-    ###########################################################################
-    # Compute transitions
+        logger.info("Calculating natural conversion...")
+        logger.info("in_data %s", in_data)
 
-    logger.info("Calculating transitions...")
+        # in_data = client.persist(in_data)
 
-    nat_conv = xr.map_blocks(
-        parallel_functions.compute_natural_conversion, in_data, kwargs=kwargs
-    )
-    logger.debug("nat_conv %s", nat_conv)
+        # sys.exit()
 
-    nat_conv = nat_conv.compute()
+        logger.info("Mapping compute_natural_conversion...")
+        out = xr.map_blocks(
+            parallel_functions.compute_natural_conversion,
+            in_data,
+            kwargs={
+                "trans_codes": trans_codes,
+                "trans_meanings": trans_meanings,
+                "x_res": float((in_data.x[1] - in_data.x[0]).values),
+                "y_res": float((in_data.y[0] - in_data.y[1]).values),
+            },
+        )
 
-    logger.info("Writing geotiff to S3")
-    ds_to_cogs(nat_conv)
+        ds_to_netcdf(out)
+
+        # nat_conv = client.persist(nat_conv)
+        # nat_conv = nat_conv.compute()
 
 
 if __name__ == "__main__":
-    cluster = LocalCluster()
-    client = Client(cluster)
+    # if TESTING:
+    #     cluster = LocalCluster()
+    # else:
+    #     # total_memory = round(psutil.virtual_memory().total / (1024 ** 3), 2)
+    #     # worker_memory = floor(total_memory / N_WORKERS)
+    #     # logger.info(
+    #     #     f"System has {total_memory} GB total memory. Using {N_WORKERS} workers, "
+    #     #     f"with {THREADS_PER_WORKER} threads per worker, and {worker_memory} GB "
+    #     #     "memory per worker."
+    #     # )
+    #     # cluster = LocalCluster(
+    #     #     n_workers=N_WORKERS,
+    #     #     threads_per_worker=THREADS_PER_WORKER,
+    #     #     memory_limit=worker_memory,
+    #     # )
+    #     cluster = LocalCluster()
+    # client = Client(cluster)
 
     main()

@@ -12,12 +12,15 @@ logger = logging.getLogger(__name__)
 
 NODATA_VALUE = 0
 
-# Calculate the area of a slice of the globe from the equator to the parallel
-# at latitude f (on WGS84 ellipsoid). Based on:
-# https://gis.stackexchange.com/questions/127165/more-accurate-way-to-calculate-area-of-rasters
-@numba.jit(nopython=True)
+
+@numba.jit(nopython=True, nogil=True)
 @cc.export("slice_area", "f8(f8)")
 def slice_area(f):
+    """
+    Calculate the area of a slice of the globe from the equator to the parallel
+    at latitude f (on WGS84 ellipsoid). Based on:
+    https://gis.stackexchange.com/questions/127165/more-accurate-way-to-calculate-area-of-rasters
+    """
     a = 6378137.0  # in meters
     b = 6356752.3142  # in meters,
     e = np.sqrt(1 - pow(b / a, 2))
@@ -31,13 +34,14 @@ def slice_area(f):
     )
 
 
-# Formula to calculate area of a raster cell on WGS84 ellipsoid, following
-# https://gis.stackexchange.com/questions/127165/more-accurate-way-to-calculate-area-of-rasters
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, nogil=True)
 @cc.export("calc_cell_area", "f8(f8, f8, f8)")
 def calc_cell_area(y, x_res, y_res):
     """
     Returns cell area in hectares
+
+    Use formula to calculate area of a raster cell on WGS84 ellipsoid, following
+    https://gis.stackexchange.com/questions/127165/more-accurate-way-to-calculate-area-of-rasters
 
     y_min: minimum latitude
     y_max: maximum latitude
@@ -60,7 +64,7 @@ def calc_cell_area(y, x_res, y_res):
     return np.reshape(out, shp)
 
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, nogil=True)
 @cc.export("calc_natural_conversion", "i2[:,:](i4[:,:], i4[:,:], i4[:,:], i4[:,:])")
 def calc_natural_conversion(trans, initial_cover, crops_initial, crops_final):
     """calculate land cover degradation"""
@@ -102,13 +106,15 @@ def compute_natural_conversion(
     x_res: float,
     y_res: float,
 ) -> xr.DataArray:
+
     coords = {"y": data.y, "x": data.x}
     out = xr.Dataset(coords=coords)
 
     initial_natural = calc_trans_meaning(
-        data.lc_initial.values, trans_codes, trans_meanings
+        data.lc_initial.values,
+        numba.typed.List(trans_codes),
+        numba.typed.List(trans_meanings),
     )
-
     meaning = calc_natural_conversion(
         data.trans.values,
         initial_natural,
@@ -119,18 +125,70 @@ def compute_natural_conversion(
     cell_areas = np.expand_dims(calc_cell_area(data.y.values, x_res, y_res), axis=1)
     cell_areas = np.repeat(cell_areas, repeats=data.x.size, axis=1)
 
-    natural_conversion_area = ((meaning >= 1) & (meaning <= 3)).astype(
+    area_natural_conversion = ((meaning >= 1) & (meaning <= 3)).astype(
         np.float32
     ) * cell_areas
 
     out["transition"] = (("y", "x"), meaning)
-    out["cell-area"] = (("y", "x"), cell_areas)
-    out["natural-conversion-area"] = (("y", "x"), natural_conversion_area)
+    out["area_pixel"] = (("y", "x"), cell_areas)
+    out["area_natural_conversion"] = (("y", "x"), area_natural_conversion)
 
     return out
 
 
-@numba.jit(nopython=True)
+def compute_cell_areas(
+    data: xr.DataArray,
+    x_res: float,
+    y_res: float,
+) -> xr.DataArray:
+    coords = {"y": data.y, "x": data.x}
+    out = xr.Dataset(coords=coords)
+
+    cell_areas = np.expand_dims(calc_cell_area(data.y.values, x_res, y_res), axis=1)
+    cell_areas = np.repeat(cell_areas, repeats=data.x.size, axis=1)
+
+    out["area_pixel"] = (("y", "x"), cell_areas)
+
+    return out
+
+
+def compute_natural_conv_transitions(
+    data: xr.DataArray, trans_codes: list, trans_meanings: list
+) -> xr.DataArray:
+    coords = {"y": data.y, "x": data.x}
+    out = xr.Dataset(coords=coords)
+
+    initial_natural = calc_trans_meaning(
+        data.lc_initial.values,
+        numba.typed.List(trans_codes),
+        numba.typed.List(trans_meanings),
+    )
+    meaning = calc_natural_conversion(
+        data.trans.values,
+        initial_natural,
+        data.crops_initial.values,
+        data.crops_final.values,
+    )
+
+    out["transition"] = (("y", "x"), meaning)
+
+    return out
+
+
+def compute_natural_conv_areas(data: xr.DataArray) -> xr.DataArray:
+    coords = {"y": data.y, "x": data.x}
+    out = xr.Dataset(coords=coords)
+
+    area_natural_conversion = (
+        (data.transition.data >= 1) & (data.transition.data <= 3)
+    ).astype(np.float32) * data.area_pixel.data
+
+    out["area_natural_conversion"] = (("y", "x"), area_natural_conversion)
+
+    return out
+
+
+@numba.jit(nopython=True, nogil=True)
 @cc.export("calc_trans_meaning", "i4[:,:](i4[:,:], i4[:,:], i2[:], i4)")
 def calc_trans_meaning(trans, trans_codes, trans_meanings):
     """calculate meaning of land cover transition"""
@@ -145,7 +203,7 @@ def calc_trans_meaning(trans, trans_codes, trans_meanings):
     return np.reshape(out, shp)
 
 
-@numba.jit(nopython=True)
+@numba.jit(nopython=True, nogil=True)
 @cc.export("calc_lc_trans", "i4[:,:](u1[:,:], u1[:,:], i4)")
 def calc_lc_trans(lc_bl, lc_tg, multiplier):
     shp = lc_bl.shape
@@ -164,7 +222,9 @@ def compute_transitions(
     out = xr.Dataset(coords=coords, attrs=global_attrs)
 
     trans = calc_lc_trans(lc.lc_initial.values, lc.lc_final.values, 1000)
-    meaning = calc_trans_meaning(trans, trans_codes, trans_meanings)
+    meaning = calc_trans_meaning(
+        trans, numba.typed.List(trans_codes), numba.typed.List(trans_meanings)
+    )
 
     out["transition"] = (("y", "x"), trans)
     out["meaning"] = (("y", "x"), meaning)
