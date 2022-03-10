@@ -49,14 +49,14 @@ setting process.
    vegetation conversion (exclusive of deforestation). The layers are produced using the
    following rules:
 
-   | Code | ESA CCI Initial Land Cover Type | ESA CCI Conversion Layer | Cropland Layer             |
-   | ---- | ------------------------------- | ------------------------ | -------------------------- |
-   | 1    | Native veg                      | Native veg conversion    | No change or cropland loss |
-   | 2    | Native veg                      | Native veg conversion    | Conversion to cropland     |
-   | 3    | Native veg                      | No native veg conversion | Conversion to cropland     |
-   | 4    | Forest                          | No native veg conversion | Conversion to cropland     |
-   | 5    | Urban                           | No native veg conversion | Conversion to cropland     |
-   | 6    | Other                           | No native veg conversion | Conversion to cropland     |
+   | Code | Initial Land Cover Type | ESA CCI Conversion Layer        | Cropland Layer             |
+   | ---- | ----------------------- | ------------------------------- | -------------------------- |
+   | 1    | Native vegetation       | Native vegetation conversion    | No change or cropland loss |
+   | 2    | Native vegetation       | Native vegetation conversion    | Conversion to cropland     |
+   | 3    | Native vegetation       | No native vegetation conversion | Conversion to cropland     |
+   | 4    | Forest                  | No native vegetation conversion | Conversion to cropland     |
+   | 5    | Urban                   | No native vegetation conversion | Conversion to cropland     |
+   | 6    | Other                   | No native vegetation conversion | Conversion to cropland     |
 
    - Note that for the cropland layer the assumption is made that an change in cropland
      extent from a value less than 50% to a value greater than 50% constitutes a
