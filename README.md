@@ -1,7 +1,7 @@
 # Science Based Targets Network Land Hub indicators
 
 This repository contains code used for a number of the indicators being tested by the
-Science Based Targets Network (SBTN) land hub. Note these are all DRAFT indicators that
+Science Based Targets Network (SBTN) Land Hub. Note these are all DRAFT indicators that
 are not yet officially endorsed by SBTN nor its partner organizations.
 
 ## License
