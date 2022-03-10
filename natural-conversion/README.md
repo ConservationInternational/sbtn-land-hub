@@ -49,14 +49,14 @@ setting process.
    vegetation conversion (exclusive of deforestation). The layers are produced using the
    following rules:
 
-   | Code | Initial Land Cover Type | ESA CCI Conversion Layer        | Cropland Layer             |
-   | ---- | ----------------------- | ------------------------------- | -------------------------- |
-   | 1    | Native vegetation       | Native vegetation conversion    | No change or cropland loss |
-   | 2    | Native vegetation       | Native vegetation conversion    | Conversion to cropland     |
-   | 3    | Native vegetation       | No native vegetation conversion | Conversion to cropland     |
-   | 4    | Forest                  | No native vegetation conversion | Conversion to cropland     |
-   | 5    | Urban                   | No native vegetation conversion | Conversion to cropland     |
-   | 6    | Other                   | No native vegetation conversion | Conversion to cropland     |
+   | Code | Initial Land Cover Type | ESA CCI Conversion Layer        | Cropland Layer             | Final Indicator              |
+   | ---- | ----------------------- | ------------------------------- | -------------------------- | ---------------------------- |
+   | 1    | Native vegetation       | Native vegetation conversion    | No change or cropland loss | Native vegetation conversion |
+   | 2    | Native vegetation       | Native vegetation conversion    | Conversion to cropland     | Native vegetation conversion |
+   | 3    | Native vegetation       | No native vegetation conversion | Conversion to cropland     | Native vegetation conversion |
+   | 4    | Forest                  | No native vegetation conversion | Conversion to cropland     | No conversion                |
+   | 5    | Urban                   | No native vegetation conversion | Conversion to cropland     | No conversion                |
+   | 6    | Other                   | No native vegetation conversion | Conversion to cropland     | No conversion                |
 
    - Note that for the cropland layer the assumption is made that an change in cropland
      extent from a value less than 50% to a value greater than 50% constitutes a
