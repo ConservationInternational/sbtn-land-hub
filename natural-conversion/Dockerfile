@@ -39,6 +39,7 @@ ADD entrypoint.sh /work/entrypoint.sh
 ADD cropland_match_to_esa.py /work/cropland_match_to_esa.py
 ADD esa_cci_transitions.py /work/esa_cci_transitions.py
 ADD natural_conversion.py /work/natural_conversion.py
+ADD natural_conversion_initial_native.py /work/natural_conversion_initial_native.py
 ADD parallel_functions.py /work/parallel_functions.py
 ADD ESA_CCI_Natural_Conversion_Coding_v2.xlsx /work/ESA_CCI_Natural_Conversion_Coding_v2.xlsx
 

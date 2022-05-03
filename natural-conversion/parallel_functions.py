@@ -188,6 +188,24 @@ def compute_natural_conv_areas(data: xr.DataArray) -> xr.DataArray:
     return out
 
 
+# @numba.jit(nopython=True, nogil=True)
+# @cc.export("recode_cover", "i4[:,:](i4[:,:], i2[:], i2[:])")
+def recode_cover(initial_cover, initial_code, recode):
+    """calculate meaning of land cover transition"""
+    coords = {"y": initial_cover.y, "x": initial_cover.x}
+    out = xr.Dataset(coords=coords)
+
+    recoded_cover = np.zeros(initial_cover.values.shape, dtype=np.int32)
+
+    for initial_code, recode in zip(initial_code, recode):
+        recoded_cover[initial_cover.values == initial_code] = recode
+    recoded_cover[initial_cover.values == NODATA_VALUE] = NODATA_VALUE
+
+    out["cover"] = (("y", "x"), recoded_cover)
+
+    return out
+
+
 @numba.jit(nopython=True, nogil=True)
 @cc.export("calc_trans_meaning", "i4[:,:](i4[:,:], i4[:,:], i2[:], i4)")
 def calc_trans_meaning(trans, trans_codes, trans_meanings):

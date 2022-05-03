@@ -18,6 +18,10 @@ case "$1" in
         echo "Starting natural_conversion calculations"
         exec python natural_conversion.py "${@:2}"
 		;;
+    initial_cover)
+        echo "Starting initial_cover calculations"
+        exec python natural_conversion_initial_native.py "${@:2}"
+		;;
     *)
         exec "$@"
 esac
