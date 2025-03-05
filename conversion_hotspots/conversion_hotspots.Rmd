@@ -1,0 +1,227 @@
+---
+title: "Conversion Hotspots"
+author: "Alex Zvoleff"
+date: "2024-06-08"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(tictoc)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(cowplot)
+library(lwgeom)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+crs_wintri <- "+proj=wintri +datum=WGS84 +no_defs +over"
+world_wintri <- st_transform_proj(world, crs = crs_wintri)
+grat_wintri <- 
+  st_graticule(lat = c(-89.9, seq(-60, 60, 30), 89.9),
+               lon = c(-179.9, seq(-135, 135, 45), 179.9)) %>%
+  st_transform_proj(crs = crs_wintri)
+```
+
+```{r read_data, cache=TRUE}
+hotspots <- read_csv("conversionHotspots.csv")
+
+ecoregions_raw <- st_read("ecoregions/Ecoregions2017.shp")
+ecoregions_raw <- st_make_valid(ecoregions_raw)
+ecoregions <- st_simplify(ecoregions_raw, dTolerance = 1000)
+ecoregions <- left_join(ecoregions, hotspots, by=join_by(ECO_NAME==ecoregion))
+
+# Check that there are no NAs (i.e. that the join worked correctly)
+table(is.na(ecoregions$allVegConversion00_10))
+table(is.na(ecoregions$allVegConversion10_20))
+
+```
+
+## Setup indicators of top ecoregions in terms of conversion
+
+Look at top 10% of ecoregions in terms of recently converted area (from 2010 -
+2020), and also in terms of total conversion since 2000. Also add an indicator
+of ecoregions where conversion has accelerated (i.e. higher rates of conversion
+in 2010-2020 version 2000-2010).
+
+```{r calculate_top}
+ecoregions %>%
+    filter(!is.na(allVegArea00)) %>%
+    mutate(accelerating=ifelse(allVegConversion10_20 > (allVegConversion00_10*1.1),
+                               'Accelerating', 'Decelerating'),
+           topByAreaRecent=percent_rank(allVegConversion10_20)>.9,
+           topByPctRecent=percent_rank(allVegConversion10_20/(allVegArea00 - allVegConversion00_10))>.9,
+           topByAreaOverall=percent_rank(totalAllVegConversion00_20)>.9,
+           topByPctOverall=percent_rank(totalAllVegConversion00_20/allVegArea00)>.9) -> ecoregions
+```
+
+
+### Plot some basic stats
+
+``` {r basic_stats, echo=FALSE}
+ecoregions %>%
+    ggplot() +
+    geom_histogram(aes(allVegArea00))
+
+ecoregions %>%
+    ggplot() +
+    geom_histogram(aes(allVegConversion10_20))
+
+ecoregions %>%
+    ggplot() +
+    geom_histogram(aes(allVegConversion10_20/(allVegArea00 - allVegConversion00_10)))
+
+ecoregions %>%
+    ggplot() +
+    geom_histogram(aes(totalAllVegConversion00_20))
+
+ecoregions %>%
+    ggplot() +
+    geom_histogram(aes(totalAllVegConversion00_20/allVegArea00))
+
+ecoregions %>%
+    ggplot(aes(allVegConversion10_20)) +
+    stat_ecdf(geom = "step")
+
+ecoregions %>%
+    ggplot(aes(allVegConversion10_20/allVegArea00)) +
+    stat_ecdf(geom = "step")
+
+```
+
+### What percentage of total conversion does each method capture?
+
+``` {r percent_of_total_conv}
+# Recent conversion
+sum(ecoregions$allVegConversion10_20[ecoregions$topByPctRecent], na.rm=TRUE) / sum(ecoregions$allVegConversion10_20) * 100
+sum(ecoregions$allVegConversion10_20[ecoregions$topByAreaRecent], na.rm=TRUE) / sum(ecoregions$allVegConversion10_20) * 100
+
+# Overall conversion
+sum(ecoregions$totalAllVegConversion00_20[ecoregions$topByPctOverall], na.rm=TRUE) / sum(ecoregions$totalAllVegConversion00_20) * 100
+sum(ecoregions$totalAllVegConversion00_20[ecoregions$topByAreaOverall], na.rm=TRUE) / sum(ecoregions$totalAllVegConversion00_20) * 100
+```
+### How many ecoregions show up in multiple methods
+``` {r sensitivity}
+ecoregions$nTop <- ecoregions$topByPctRecent + ecoregions$topByAreaRecent + ecoregions$topByPctOverall + ecoregions$topByAreaOverall
+table(ecoregions$nTop)
+```
+
+
+## And what do maps look like
+
+### By area, last 10 years
+``` {r map_top_area_recent}
+ggplot() +
+  geom_sf(data=world_wintri) +
+  geom_sf(data=filter(ecoregions, topByAreaRecent), aes(fill=ECO_NAME)) +
+  geom_sf(data=grat_wintri, color = "gray90", size = 0.05/.pt) + 
+  coord_sf(datum=st_crs("+proj=wintri +datum=WGS84 +no_defs +over")) +
+  theme_map() +
+  theme(legend.position="none")
+```
+
+### By percent converted, last 10 years
+``` {r map_top_percent_recent}
+ggplot() +
+  geom_sf(data=world_wintri) +
+  geom_sf(data=filter(ecoregions, topByPctRecent), aes(fill=ECO_NAME)) +
+  geom_sf(data=grat_wintri, color = "gray90", size = 0.05/.pt) + 
+  coord_sf(datum=st_crs("+proj=wintri +datum=WGS84 +no_defs +over")) +
+  theme_map() +
+  theme(legend.position="none")
+```
+
+### By area converted, last 20 years
+
+``` {r map_top_area_overall}
+ggplot() +
+  geom_sf(data=world_wintri) +
+  geom_sf(data=filter(ecoregions, topByAreaOverall), aes(fill=ECO_NAME)) +
+  geom_sf(data=grat_wintri, color = "gray90", size = 0.05/.pt) + 
+  coord_sf(datum=st_crs("+proj=wintri +datum=WGS84 +no_defs +over")) +
+  theme_map() +
+  theme(legend.position="none")
+```
+
+### By percent converted, last 20 years
+
+``` {r map_top_percent_overall}
+ggplot() +
+  geom_sf(data=world_wintri) +
+  geom_sf(data=filter(ecoregions, topByPctOverall), aes(fill=ECO_NAME)) +
+  geom_sf(data=grat_wintri, color = "gray90", size = 0.05/.pt) + 
+  coord_sf(datum=st_crs("+proj=wintri +datum=WGS84 +no_defs +over")) +
+  theme_map() +
+  theme(legend.position="none")
+```
+
+## The 21 ecoregions that show up across methods
+
+``` {r map_top_across_methods}
+ecoregions %>%
+  filter(nTop==4) %>%
+  arrange(ECO_NAME) %>%
+  st_drop_geometry() %>%
+  select(ECO_NAME)
+
+ggplot() +
+  geom_sf(data=world_wintri) +
+  geom_sf(data=filter(ecoregions, nTop==4), aes(fill=ECO_NAME)) +
+  geom_sf(data=grat_wintri, color = "gray90", size = 0.05/.pt) + 
+  coord_sf(datum=st_crs("+proj=wintri +datum=WGS84 +no_defs +over")) +
+  theme_map() +
+  theme(legend.position="none")
+```
+
+``` {r intersect_area, cache=TRUE}
+gadm <- st_read("C:/Users/azvoleff/OneDrive - Conservation International Foundation/Data/gadm_410-levels.gpkg", "ADM_1")
+gadm_0 <- st_read("C:/Users/azvoleff/OneDrive - Conservation International Foundation/Data/gadm_410-levels.gpkg", "ADM_0")
+gadm <- st_make_valid(gadm)
+
+ecoregions$hotspot <- ecoregions$nTop==4
+
+tic()
+gadm %>%
+  st_filter(y=filter(ecoregions, hotspot), .predicate = st_intersects) %>%
+  mutate(admin_area = st_area(.)) -> hotspot_admin
+gadm_intersection <- st_intersection(hotspot_admin, filter(ecoregions, hotspot))
+toc()
+
+full_join(
+  hotspot_admin,
+  gadm_intersection %>%
+    mutate(intersect_area = st_area(.)) %>%
+    select(GID_1, intersect_area) %>%
+    st_drop_geometry() %>%
+    group_by(GID_1) %>%
+    summarise(intersect_area=sum(intersect_area))
+  ) %>%
+  mutate(intersect_frac=as.numeric(intersect_area / admin_area)) -> intersection_frac
+```
+
+## Jurisdictions overlapping the 21 ecoregions that show up across methods
+
+### Jurisdictions by percent overlap
+``` {r plot_intersect_jurisdictions}
+ggplot() +
+  geom_sf(data=world_wintri) +
+  geom_sf(data=intersection_frac, aes(fill=intersect_frac > .5)) +
+  geom_sf(data=grat_wintri, color = "gray90", size = 0.05/.pt) + 
+  coord_sf(datum=st_crs("+proj=wintri +datum=WGS84 +no_defs +over")) +
+  theme_map()
+```
+
+### Jurisdictions with at least 50% overlap overlaid on hotspot ecoregions
+``` {r plot_intersect_jurisdictions_on_hotspots}
+ggplot() +
+  geom_sf(data=world_wintri) +
+  geom_sf(data=filter(ecoregions, hotspot), fill='cyan') +
+  geom_sf(data=filter(intersection_frac, intersect_frac > .5), fill='blue') +
+  geom_sf(data=grat_wintri, color = "gray90", size = 0.05/.pt) + 
+  coord_sf(datum=st_crs("+proj=wintri +datum=WGS84 +no_defs +over")) +
+  theme_map()
+
+```
