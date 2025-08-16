@@ -3,6 +3,7 @@ library(terra)
 library(dplyr)
 library(fasterize)
 library(exactextractr)
+library(data.table)
 
 
 ecoregions <- st_read("C:/Users/azvol/Code/LandDegradation/sbtn-land-hub/thresholds-maps/Ecoregions2017/Ecoregions2017.shp") %>% 
@@ -61,64 +62,53 @@ get_fraction_table <- function(r, bands, zones) {
     
     # Handle the result - coverage_area returns a list with one data frame per feature
     if (is.list(coverage) && length(coverage) > 0) {
+        
         # For multi-band input, columns should be named after each band
         band_names <- names(r_subset)
         value_cols <- intersect(band_names, names(coverage[[1]]))
         
-        # Convert from wide format (one column per band) to long format
-        result_list <- vector("list", length(coverage))
+        # Convert all zone data to data.table for fast processing
+        zone_list <- vector("list", length(coverage))
         
         for (i in seq_along(coverage)) {
             zone_df <- coverage[[i]]
             zone_id <- if ("ECO_ID" %in% names(zone_df)) zone_df$ECO_ID[1] else i
             
-            # Reshape from wide to long format
-            long_list <- vector("list", length(value_cols))
+            # Convert to data.table
+            dt <- as.data.table(zone_df)
+            dt[, zone_id := zone_id]
             
-            for (j in seq_along(value_cols)) {
-                band_name <- value_cols[j]
-                band_values <- zone_df[[band_name]]
-                areas <- zone_df$coverage_area
-                
-                # Remove NA values 
-                valid_idx <- !is.na(band_values) & !is.na(areas)
-                if (sum(valid_idx) > 0) {
-                    valid_values <- band_values[valid_idx]
-                    valid_areas <- areas[valid_idx]
-                    
-                    # Aggregate areas by value using tapply (sum areas for each unique value)
-                    area_by_value <- tapply(valid_areas, valid_values, sum, na.rm = TRUE)
-                    
-                    # Convert to data frame and filter out zero areas
-                    unique_values <- as.numeric(names(area_by_value))
-                    total_areas <- as.numeric(area_by_value)
-                    
-                    # Keep only non-zero areas
-                    nonzero_idx <- total_areas > 0
-                    if (sum(nonzero_idx) > 0) {
-                        long_list[[j]] <- data.frame(
-                            ECO_ID = zone_id,
-                            band = band_name,
-                            value = unique_values[nonzero_idx],
-                            area = total_areas[nonzero_idx],
-                            stringsAsFactors = FALSE
-                        )
-                    }
-                }
-            }
+            # Keep only rows with valid coverage area
+            dt <- dt[!is.na(coverage_area) & coverage_area > 0]
             
-            # Combine all bands for this zone
-            valid_bands <- long_list[!sapply(long_list, is.null)]
-            if (length(valid_bands) > 0) {
-                result_list[[i]] <- do.call(rbind, valid_bands)
+            if (nrow(dt) > 0) {
+                zone_list[[i]] <- dt
             }
         }
         
-        # Combine all zones
-        valid_zones <- result_list[!sapply(result_list, is.null)]
-        if (length(valid_zones) > 0) {
-            result <- do.call(rbind, valid_zones)
-            rownames(result) <- NULL
+        # Combine all zones into one large data.table
+        all_zones_dt <- rbindlist(zone_list, fill = TRUE)
+        
+        if (nrow(all_zones_dt) > 0) {
+            # Melt from wide to long format (much faster than manual loops)
+            long_dt <- melt(all_zones_dt, 
+                           id.vars = c("zone_id", "coverage_area"),
+                           measure.vars = value_cols,
+                           variable.name = "band",
+                           value.name = "value")
+            
+            # Remove rows with NA values
+            long_dt <- long_dt[!is.na(value)]
+            
+            # Aggregate coverage area by zone_id, band, and value (very fast with data.table)
+            result_dt <- long_dt[, .(area = sum(coverage_area, na.rm = TRUE)), 
+                                by = .(ECO_ID = zone_id, band, value)]
+            
+            # Filter out zero areas and convert back to data.frame
+            result_dt <- result_dt[area > 0]
+            result <- as.data.frame(result_dt)
+            result$band <- as.character(result$band)
+            
             return(result)
         }
     }
