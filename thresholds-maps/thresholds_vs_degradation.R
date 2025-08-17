@@ -4,6 +4,9 @@ library(dplyr)
 library(fasterize)
 library(exactextractr)
 library(data.table)
+library(tidyr)
+library(readr)
+library(stringr)
 
 
 ecoregions <- st_read("C:/Users/azvol/Code/LandDegradation/sbtn-land-hub/thresholds-maps/Ecoregions2017/Ecoregions2017.shp") %>% 
@@ -117,8 +120,73 @@ get_fraction_table <- function(r, bands, zones) {
     return(data.frame(ECO_ID = numeric(0), band = character(0), value = numeric(0), area = numeric(0)))
 }
 
-# Process all bands
 fractions_by_band <- get_fraction_table(sdg151_raster_r, c(1,2,3,6,7,14), ecoregions)
+
+fractions_by_band <- get_fraction_table(sdg151_raster_r, c(4), ecoregions)
 #fractions_by_band <- get_fraction_table(sdg151_raster_r, c(1:14), ecoregions)
 
-#plot(ecoregions, border='red', lwd=0.5)
+#########################
+# Load CSVs
+
+csv_path <- "C:/Users/azvol/Conservation International Foundation/Jordan Rogan - To share with Alex/"
+
+# Load and add indicator columns in one step
+ndep_data <- read_csv(file.path(csv_path, "Neotropic Ndep.csv"), col_types = cols(.default = "c")) %>% 
+    mutate(indicator = "nitrogen_deposition")
+
+soc_data <- read_csv(file.path(csv_path, "Neotropic SOC.csv"), col_types = cols(.default = "c")) %>% 
+    mutate(indicator = "soil_organic_carbon")
+
+soil_erosion_data <- read_csv(file.path(csv_path, "Neotropic soil erosion.csv"), col_types = cols(.default = "c")) %>% 
+    mutate(indicator = "soil_erosion")
+
+nat_land_data <- read_csv(file.path(csv_path, "Neotropic nat land.csv"), col_types = cols(.default = "c")) %>% 
+    mutate(indicator = "natural_land")
+
+# Combine all datasets and convert to long format
+combined_data <- bind_rows(ndep_data, soc_data, soil_erosion_data, nat_land_data) %>%
+    # Clean column names
+    rename_with(~ make.names(.) %>% str_replace_all("\\.", "_")) %>%
+    # Convert to long format
+    pivot_longer(
+        cols = -c(ECO_ID, contains("Ecoregion"), indicator),
+        names_to = "metric",
+        values_to = "value"
+    ) %>%
+    # Convert ECO_ID and value to appropriate types
+    mutate(
+        ECO_ID = as.numeric(ECO_ID),
+        value = as.numeric(value)
+    ) %>%
+    # Clean up and filter
+    filter(!is.na(ECO_ID) & !is.na(value)) %>%
+    mutate(metric = str_replace_all(metric, "_+", "_") %>% str_remove("_$")) %>%
+    select(-Ecoregion_name)
+
+# Display results
+cat("Combined data has", nrow(combined_data), "rows\n")
+print(head(combined_data, 10))
+
+###########################
+# Join data and plot results
+
+# Reshape combined_data to wide format with metric values in columns
+
+combined_data_wide <- combined_data %>%
+    pivot_wider(names_from = metric, values_from = value)
+
+# Now join with the SDG 15.3.1 data from the rasters
+
+
+
+combined_data_wide %>%
+    right_join(fractions_by_band, by = "ECO_ID")
+    
+    %>%
+    ggplot(aes(x = value, fill = metric)) +
+    geom_histogram(position = "dodge", bins = 30) +
+    facet_wrap(~ ECO_ID) +
+    theme_minimal() +
+    labs(title = "Combined Data vs. Fractions by Band",
+         x = "Value",
+         y = "Count")
