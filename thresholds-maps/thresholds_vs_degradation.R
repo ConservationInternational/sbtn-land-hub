@@ -7,6 +7,7 @@ library(data.table)
 library(tidyr)
 library(readr)
 library(stringr)
+library(purrr)
 
 
 ecoregions <- st_read("C:/Users/azvol/Code/LandDegradation/sbtn-land-hub/thresholds-maps/Ecoregions2017/Ecoregions2017.shp") %>% 
@@ -43,18 +44,9 @@ get_fraction_table <- function(r, bands, zones) {
     # Create subset of raster with only the bands we want
     r_subset <- r[[bands]]
     
-    # Vectorized SOC recoding - more efficient than loop
-    soc_layers <- grepl("^soc_deg", names(r_subset))
-    if (any(soc_layers)) {
-        # Apply recoding only to SOC layers using vectorized operations
-        r_subset[[which(soc_layers)]] <- ifel(
-            r_subset[[which(soc_layers)]] < -10 & r_subset[[which(soc_layers)]] > -32768, -1,
-            ifel(r_subset[[which(soc_layers)]] >= -10 & r_subset[[which(soc_layers)]] <= 10, 0,
-            ifel(r_subset[[which(soc_layers)]] > 10, 1, r_subset[[which(soc_layers)]])))
-    }
-    
-    # Process all bands at once using coverage_area
-    coverage <- exactextractr::exact_extract(
+    # Use exact_extract to get coverage_area data for each zone
+    # This efficiently extracts pixel values and their coverage areas
+    coverage_list <- exactextractr::exact_extract(
         r_subset, 
         zones, 
         coverage_area = TRUE,
@@ -63,62 +55,48 @@ get_fraction_table <- function(r, bands, zones) {
         max_cells_in_memory = 1e8
     )
     
-    # Handle the result - coverage_area returns a list with one data frame per feature
-    if (is.list(coverage) && length(coverage) > 0) {
+    # Process the results outside of exact_extract
+    if (length(coverage_list) > 0) {
+        # Convert list of data frames to long format with aggregation
+        result_list <- vector("list", length(coverage_list))
         
-        # For multi-band input, columns should be named after each band
-        band_names <- names(r_subset)
-        value_cols <- intersect(band_names, names(coverage[[1]]))
-        
-        # Convert all zone data to data.table for fast processing
-        zone_list <- vector("list", length(coverage))
-        
-        for (i in seq_along(coverage)) {
-            zone_df <- coverage[[i]]
-            zone_id <- if ("ECO_ID" %in% names(zone_df)) zone_df$ECO_ID[1] else i
+        for (i in seq_along(coverage_list)) {
+            df <- coverage_list[[i]]
+            eco_id <- df$ECO_ID[1]  # Get the ECO_ID for this zone
             
-            # Convert to data.table
-            dt <- as.data.table(zone_df)
-            dt[, zone_id := zone_id]
+            # Get band columns (exclude coverage_area and ECO_ID)
+            band_cols <- setdiff(names(df), c("coverage_area", "ECO_ID"))
             
-            # Keep only rows with valid coverage area
-            dt <- dt[!is.na(coverage_area) & coverage_area > 0]
+            # Convert to long format and aggregate
+            long_df <- df %>%
+                tidyr::pivot_longer(
+                    cols = dplyr::all_of(band_cols),
+                    names_to = "band", 
+                    values_to = "value"
+                ) %>%
+                dplyr::filter(!is.na(.data$value) & .data$coverage_area > 0) %>%
+                dplyr::group_by(.data$band, .data$value) %>%
+                dplyr::summarise(area = sum(.data$coverage_area, na.rm = TRUE), .groups = "drop") %>%
+                dplyr::filter(.data$area > 0) %>%
+                dplyr::mutate(ECO_ID = eco_id)
             
-            if (nrow(dt) > 0) {
-                zone_list[[i]] <- dt
-            }
+            result_list[[i]] <- long_df
         }
         
-        # Combine all zones into one large data.table
-        all_zones_dt <- rbindlist(zone_list, fill = TRUE)
+        # Combine all results
+        combined_result <- dplyr::bind_rows(result_list) %>%
+            dplyr::select("ECO_ID", "band", "value", "area") %>%
+            dplyr::arrange(.data$ECO_ID, .data$band, .data$value)
         
-        if (nrow(all_zones_dt) > 0) {
-            # Melt from wide to long format (much faster than manual loops)
-            long_dt <- melt(all_zones_dt, 
-                           id.vars = c("zone_id", "coverage_area"),
-                           measure.vars = value_cols,
-                           variable.name = "band",
-                           value.name = "value")
-            
-            # Remove rows with NA values
-            long_dt <- long_dt[!is.na(value)]
-            
-            # Aggregate coverage area by zone_id, band, and value (very fast with data.table)
-            result_dt <- long_dt[, .(area = sum(coverage_area, na.rm = TRUE)), 
-                                by = .(ECO_ID = zone_id, band, value)]
-            
-            # Filter out zero areas and convert back to data.frame
-            result_dt <- result_dt[area > 0]
-            result <- as.data.frame(result_dt)
-            result$band <- as.character(result$band)
-            
-            return(result)
-        }
+        return(as.data.frame(combined_result))
     }
     
     # Return empty result if no data
     return(data.frame(ECO_ID = numeric(0), band = character(0), value = numeric(0), area = numeric(0)))
 }
+
+
+fractions_by_band <- get_fraction_table(sdg151_raster_r, c(1,2), ecoregions)
 
 fractions_by_band <- get_fraction_table(sdg151_raster_r, c(1,2,3,6,7,14), ecoregions)
 
@@ -176,13 +154,8 @@ combined_data_wide <- combined_data %>%
     pivot_wider(names_from = metric, values_from = value)
 
 # Now join with the SDG 15.3.1 data from the rasters
-
-
-
 combined_data_wide %>%
-    right_join(fractions_by_band, by = "ECO_ID")
-    
-    %>%
+    right_join(fractions_by_band, by = "ECO_ID") %>%
     ggplot(aes(x = value, fill = metric)) +
     geom_histogram(position = "dodge", bins = 30) +
     facet_wrap(~ ECO_ID) +
