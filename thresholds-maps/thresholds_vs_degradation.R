@@ -95,6 +95,76 @@ get_fraction_table <- function(r, bands, zones) {
     return(data.frame(ECO_ID = numeric(0), band = character(0), value = numeric(0), area = numeric(0)))
 }
 
+# Function to get area-weighted fraction for SOC bands with recoding
+get_fraction_table_soc <- function(r, bands, zones) {
+    # Create subset of raster with only the bands we want
+    r_subset <- r[[bands]]
+    
+    # Use exact_extract with custom function to recode SOC values and calculate coverage_area
+    coverage_list <- exactextractr::exact_extract(
+        r_subset, 
+        zones, 
+        fun = function(df) {
+            # Get band columns (exclude coverage_area)
+            band_cols <- setdiff(names(df), "coverage_area")
+            
+            # Apply SOC recoding to each band column
+            for (col in band_cols) {
+                df[[col]] <- ifelse(df[[col]] > -32768 & df[[col]] <= -10, -1,
+                                   ifelse(df[[col]] > -10 & df[[col]] < 10, 0,
+                                         ifelse(df[[col]] >= 10, 1, df[[col]])))
+            }
+            
+            # Return the recoded data frame with coverage_area intact
+            return(df)
+        },
+        coverage_area = TRUE,
+        include_cols = "ECO_ID",
+        summarize_df = TRUE,
+        progress = TRUE,
+        max_cells_in_memory = 1e8
+    )
+    
+    # Process the results outside of exact_extract (same as original function)
+    if (length(coverage_list) > 0) {
+        # Convert list of data frames to long format with aggregation
+        result_list <- vector("list", length(coverage_list))
+        
+        for (i in seq_along(coverage_list)) {
+            df <- coverage_list[[i]]
+            eco_id <- df$ECO_ID[1]  # Get the ECO_ID for this zone
+            
+            # Get band columns (exclude coverage_area and ECO_ID)
+            band_cols <- setdiff(names(df), c("coverage_area", "ECO_ID"))
+            
+            # Convert to long format and aggregate
+            long_df <- df %>%
+                tidyr::pivot_longer(
+                    cols = dplyr::all_of(band_cols),
+                    names_to = "band", 
+                    values_to = "value"
+                ) %>%
+                dplyr::filter(!is.na(.data$value) & .data$coverage_area > 0) %>%
+                dplyr::group_by(.data$band, .data$value) %>%
+                dplyr::summarise(area = sum(.data$coverage_area, na.rm = TRUE), .groups = "drop") %>%
+                dplyr::filter(.data$area > 0) %>%
+                dplyr::mutate(ECO_ID = eco_id)
+            
+            result_list[[i]] <- long_df
+        }
+        
+        # Combine all results
+        combined_result <- dplyr::bind_rows(result_list) %>%
+            dplyr::select("ECO_ID", "band", "value", "area") %>%
+            dplyr::arrange(.data$ECO_ID, .data$band, .data$value)
+        
+        return(as.data.frame(combined_result))
+    }
+    
+    # Return empty result if no data
+    return(data.frame(ECO_ID = numeric(0), band = character(0), value = numeric(0), area = numeric(0)))
+}
+
 
 fractions_by_band <- get_fraction_table(sdg151_raster_r, c(1,2), ecoregions)
 
