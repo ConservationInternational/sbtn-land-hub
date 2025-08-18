@@ -35,7 +35,7 @@ CCI_S3_BUCKET = "trends.earth-private"
 OUT_S3_BUCKET = "trends.earth-private"
 OUT_S3_PREFIX = "esa-cci/transitions"
 
-INITIAL_YEAR = 2000
+INITIAL_YEAR = 2010
 CCI_INITIAL_FILE = f"ESACCI-LC-L4-LCCS-Map-300m-P1Y-{INITIAL_YEAR}-v2.0.7.tif"
 
 formatter = "[%(levelname)s] %(asctime)s - %(message)s [%(funcName)s %(lineno)d]"
@@ -74,7 +74,8 @@ def _log_file_size(out_file):
     )
 
 
-def ds_to_cog(ds, client):
+# def ds_to_cog(ds, client):
+def ds_to_cog(ds):
     ds.rio.write_crs("EPSG:4326", inplace=True)
 
     if TESTING:
@@ -83,39 +84,16 @@ def ds_to_cog(ds, client):
         testing_string = ""
 
     out_file = (
-        DATA_PATH
-        / f"ESA-CCI-recoded_land_cover_{INITIAL_YEAR}{testing_string}.tif"
+        DATA_PATH / f"ESA-CCI-recoded_land_cover_{INITIAL_YEAR}{testing_string}.tif"
     )
     logger.info(f"Writing {out_file}...")
     ds.rio.to_raster(
         out_file,
         driver="Gtiff",
         compress="LZW",
-        lock=Lock("rio-write", client=client),
+        #    lock=Lock("rio-write", client=client),
     )
     _log_file_size(out_file)
-    put_to_s3(out_file, OUT_S3_BUCKET, OUT_S3_PREFIX)
-
-
-def ds_to_netcdf(ds):
-    if TESTING:
-        testing_string = "_TEST"
-    else:
-        testing_string = ""
-
-    out_file = (
-        DATA_PATH
-        / f"natural-conversion_300m_{INITIAL_YEAR}{testing_string}.nc"
-    )
-    logger.info(f"Writing {out_file}...")
-    encoding_dict = {key: {"zlib": True, "complevel": 6} for key in ds.data_vars.keys()}
-    write_job = ds.to_netcdf(out_file, encoding=encoding_dict, compute=False)
-
-    write_job = write_job.persist()
-    progress(write_job)
-    write_job.compute()
-    _log_file_size(out_file)
-
     put_to_s3(out_file, OUT_S3_BUCKET, OUT_S3_PREFIX)
 
 
@@ -208,25 +186,15 @@ def main():
         logger.info("Calculating natural conversion...")
         logger.info("initial_cover %s", initial_cover)
 
-        # in_data = client.persist(in_data)
-
-        # sys.exit()
-
         logger.info("Mapping compute_natural_conversion...")
         out = xr.map_blocks(
             parallel_functions.recode_cover,
             initial_cover,
-            kwargs={
-                "initial_code": initial_code,
-                "recode": recode
-            },
+            kwargs={"initial_code": initial_code, "recode": recode},
         )
 
-        #ds_to_netcdf(out)
-        ds_to_cog(out, client)
-
-        # nat_conv = client.persist(nat_conv)
-        # nat_conv = nat_conv.compute()
+        # ds_to_cog(out, client)
+        ds_to_cog(out)
 
 
 if __name__ == "__main__":
