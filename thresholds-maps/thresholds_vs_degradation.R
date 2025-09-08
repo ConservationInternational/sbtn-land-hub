@@ -12,8 +12,6 @@ library(purrr)
 
 ecoregions <- st_read("C:/Users/azvol/Code/LandDegradation/sbtn-land-hub/thresholds-maps/Ecoregions2017/Ecoregions2017.shp") %>% 
     filter(REALM == "Neotropic")
-ecoregions <- ecoregions[1:2,]
-#ecoregions
 
 sdg151_raster_r <- terra::rast("C:/Data/Output/TrendsEarth_SDG15.3.1_2000-2023.tiff")
 
@@ -35,9 +33,6 @@ names(sdg151_raster_r) <- c(
 )
 
 names(sdg151_raster_r)
-
-sdg151_raster_r
-
 
 # Function to get area-weighted fraction for each value in each band
 get_fraction_table <- function(r, bands, zones) {
@@ -100,32 +95,17 @@ get_fraction_table_soc <- function(r, bands, zones) {
     # Create subset of raster with only the bands we want
     r_subset <- r[[bands]]
     
-    # Use exact_extract with custom function to recode SOC values and calculate coverage_area
+    # Use exact_extract to get coverage_area data for each zone (same as original)
     coverage_list <- exactextractr::exact_extract(
         r_subset, 
         zones, 
-        fun = function(df) {
-            # Get band columns (exclude coverage_area)
-            band_cols <- setdiff(names(df), "coverage_area")
-            
-            # Apply SOC recoding to each band column
-            for (col in band_cols) {
-                df[[col]] <- ifelse(df[[col]] > -32768 & df[[col]] <= -10, -1,
-                                   ifelse(df[[col]] > -10 & df[[col]] < 10, 0,
-                                         ifelse(df[[col]] >= 10, 1, df[[col]])))
-            }
-            
-            # Return the recoded data frame with coverage_area intact
-            return(df)
-        },
         coverage_area = TRUE,
         include_cols = "ECO_ID",
-        summarize_df = TRUE,
         progress = TRUE,
         max_cells_in_memory = 1e8
     )
     
-    # Process the results outside of exact_extract (same as original function)
+    # Process the results outside of exact_extract with SOC recoding
     if (length(coverage_list) > 0) {
         # Convert list of data frames to long format with aggregation
         result_list <- vector("list", length(coverage_list))
@@ -136,6 +116,27 @@ get_fraction_table_soc <- function(r, bands, zones) {
             
             # Get band columns (exclude coverage_area and ECO_ID)
             band_cols <- setdiff(names(df), c("coverage_area", "ECO_ID"))
+            
+            # Apply SOC recoding to band columns
+            for (col in band_cols) {
+                # Create a copy to work with
+                values <- df[[col]]
+                
+                # Apply SOC recoding with explicit conditions
+                # Only recode non-NA values
+                valid_mask <- !is.na(values)
+                
+                # Initialize recoded values as original
+                recoded <- values
+                
+                # Apply recoding rules only to valid (non-NA) values
+                recoded[valid_mask & values > -32768 & values <= -10] <- -1
+                recoded[valid_mask & values > -10 & values < 10] <- 0  
+                recoded[valid_mask & values >= 10] <- 1
+                
+                # Assign back to dataframe
+                df[[col]] <- recoded
+            }
             
             # Convert to long format and aggregate
             long_df <- df %>%
@@ -165,8 +166,14 @@ get_fraction_table_soc <- function(r, bands, zones) {
     return(data.frame(ECO_ID = numeric(0), band = character(0), value = numeric(0), area = numeric(0)))
 }
 
+#ecoregions <- ecoregions[1:2,]
 
-fractions_by_band <- get_fraction_table(sdg151_raster_r, c(1,2), ecoregions)
+fracs_prod <- get_fraction_table(sdg151_raster_r, grep('prod_deg_', names(sdg151_raster_r)), ecoregions)
+fracs_soc <- get_fraction_table_soc(sdg151_raster_r, grep('soc_', names(sdg151_raster_r)), ecoregions)
+fracs_sdg <- get_fraction_table(sdg151_raster_r, grep('sdg_', names(sdg151_raster_r)), ecoregions)
+fractions_all <- bind_rows(fracs_prod, fracs_soc, fracs_sdg)
+
+
 
 fractions_by_band <- get_fraction_table(sdg151_raster_r, c(1,2,3,6,7,14), ecoregions)
 
